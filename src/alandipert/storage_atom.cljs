@@ -237,3 +237,23 @@ discarded an only the new one is committed."
 
 (defn remove-session-storage! [k]
   (remove-html-storage! js/sessionStorage k))
+
+;;; Some extra partitioning
+
+(deftype MapFieldPartitioning [key]
+  IPartitioning
+  (split [_ value]
+    (if (map? value)
+      ;; NB: `::none` would conflict
+      [(dissoc value key) (get value key ::unstored)]
+      [value ::unstored]))
+  (join [this [unstored stored]]
+    (if (and (map? unstored) (not= stored ::unstored))
+      (assoc unstored key stored)
+      unstored)))
+
+(defn store-map-field
+  "Return a partitioning under which the `key` field of a map is regarded as
+  the storable part and the rest of the map as the unstorable."
+  [key]
+  (MapFieldPartitioning. key))
