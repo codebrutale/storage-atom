@@ -1,8 +1,9 @@
 (ns alandipert.storage-atom.test
   (:require [alandipert.storage-atom
              :refer [clear-local-storage! clj->json dispatch-synthetic-event!
-                     load-local-storage local-storage remove-local-storage!
-                     *storage-delay*]]
+                     join load-local-storage local-storage remove-local-storage!
+                     split *storage-delay* store-map-field]
+             :as storage-atom]
             [alandipert.storage-atom.test.macros
              :refer-macros [with-local-storage-testing-scope]]
             [cljs.test :refer-macros [deftest is testing run-tests]]))
@@ -82,3 +83,48 @@
         (is (= @bar {:y 2}))
         (is (= (load-local-storage :foo) nil))
         (is (= (load-local-storage :bar) nil))))))
+
+;;; partitioning tests
+
+(deftest test-map-field-partitioning
+  (let [p (store-map-field :x)]
+    ;; XXX(soija) Should be property based
+    (testing "Splits correctly"
+      (is (= (split p {:x 1}) [{} 1]))
+      (is (= (split p {:x [{1 #{2 3}
+                            4 #{5 6}}]})
+             [{} [{1 #{2 3}
+                   4 #{5 6}}]]))
+      (is (= (split p {:x 1 :y 2}) [{:y 2} 1]))
+      (is (= (split p {:y 2}) [{:y 2} ::storage-atom/unstored]))
+      (is (= (split p :not-a-map) [:not-a-map ::storage-atom/unstored])))
+    (testing "Joins correctly"
+      (is (= (join p [{} 1]) {:x 1}))
+      (is (= (join p [{} [{1 #{2 3}
+                            4 #{5 6}}]])
+             {:x [{1 #{2 3}
+                   4 #{5 6}}]}))
+      (is (= (join p [{:y 2} 1]) {:x 1 :y 2}))
+      (is (= (join p [{:y 2} ::storage-atom/unstored]) {:y 2}))
+      (is (= (join p [:not-a-map ::storage-atom/unstored]) :not-a-map)))))
+
+(deftest test-partitioning-with-local-storage
+  (with-local-storage-testing-scope
+    (let [foo (local-storage (atom {})
+                             :foo
+                             {:partitioning (store-map-field :x)})]
+      (swap! foo assoc :y 1)
+      (is (= @foo {:y 1}))
+      (is (= (load-local-storage :foo) ::storage-atom/unstored))
+      (swap! foo assoc :x 2)
+      (is (= @foo {:x 2 :y 1}))
+      (is (= (load-local-storage :foo) 2))
+      (swap! foo dissoc :x)
+      (is (= @foo {:y 1}))
+      (is (= (load-local-storage :foo) ::storage-atom/unstored))
+      (reset! foo {})
+      (is (= @foo {}))
+      (is (= (load-local-storage :foo) ::storage-atom/unstored))
+      (swap! foo assoc :x [#{1 2 3}])
+      (is (= @foo {:x [#{1 2 3}]}))
+      (is (= (load-local-storage :foo) [#{1 2 3}])))))
